@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
 from setuptools import setup, find_packages
+from pip._internal.req import parse_requirements
 
-import pgmpy
+install_reqs = parse_requirements("requirements.txt", session="hack")
+reqs = [str(ir.req) for ir in install_reqs]
 
 setup(
     name="pgmpy",
-    version=pgmpy.__version__,
+    version="0.0.0",
     description="A library for Probabilistic Graphical Models",
     packages=find_packages(exclude=["tests"]),
     author="Ankur Ankan",
@@ -25,5 +27,5 @@ setup(
         "Topic :: Scientific/Engineering",
     ],
     long_description="https://github.com/pgmpy/pgmpy/blob/dev/README.md",
-    install_requires=[],
+    install_requires=reqs,
 )
