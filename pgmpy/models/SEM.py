@@ -4,6 +4,7 @@ import warnings
 import itertools
 
 from networkx.algorithms.dag import descendants
+from pyparsing import OneOrMore, Word, Optional, Suppress, alphanums, nums
 
 from pgmpy.base import DAG
 from pgmpy.global_vars import HAS_PANDAS
@@ -584,11 +585,11 @@ class SEMGraph(DAG):
         """
         Converts the model from a graphical representation to an equivalent algebraic
         representation. This converts the model into a Reticular Action Model (RAM) model
-        representation which is implemented by `pgmpy.models.SEMLISREL` class.
+        representation which is implemented by `pgmpy.models.SEMAlg` class.
 
         Returns
         -------
-        SEMLISREL instance: Instance of `SEMLISREL` representing the model.
+        SEMAlg instance: Instance of `SEMAlg` representing the model.
 
         Examples
         --------
@@ -627,9 +628,9 @@ class SEMGraph(DAG):
         for index, obs_var in enumerate(self.observed):
             wedge_y[index][nodelist.index(obs_var)] = 1.0
 
-        from pgmpy.models import SEMLISREL
+        from pgmpy.models import SEMAlg
 
-        return SEMLISREL(
+        return SEMAlg(
             eta=nodelist,
             B=graph_adj.T,
             zeta=err_adj.T,
@@ -755,7 +756,7 @@ class SEMGraph(DAG):
 
         See Also
         --------
-        to_lisrel: Converts the model to `pgmpy.models.SEMLISREL` instance.
+        to_lisrel: Converts the model to `pgmpy.models.SEMAlg` instance.
 
         Examples
         --------
@@ -828,7 +829,7 @@ class SEMGraph(DAG):
         return (var_names, edges_masks, fixed_masks)
 
 
-class SEMLISREL:
+class SEMAlg:
     """
     Base class for algebraic representation of Structural Equation Models(SEMs). The model is
     represented using the Reticular Action Model (RAM).
@@ -836,7 +837,7 @@ class SEMLISREL:
 
     def __init__(self, eta=None, B=None, zeta=None, wedge_y=None, fixed_values=None):
         r"""
-        Initializes SEMLISREL model. The model is represented using the Reticular Action Model(RAM)
+        Initializes SEMAlg model. The model is represented using the Reticular Action Model(RAM)
         which is given as:
         ..math::
             \mathbf{\eta} = \mathbf{B \eta} + \mathbf{\zeta}
@@ -872,11 +873,11 @@ class SEMLISREL:
 
         Returns
         -------
-        pgmpy.models.SEMLISREL instance: An instance of the object with initalized values.
+        pgmpy.models.SEMAlg instance: An instance of the object with initalized values.
 
         Examples
         --------
-        >>> from pgmpy.models import SEMLISREL
+        >>> from pgmpy.models import SEMAlg
         # TODO: Finish this example
         """
         self.eta = eta
@@ -914,8 +915,8 @@ class SEMLISREL:
 
         Examples
         --------
-        >>> from pgmpy.models import SEMLISREL
-        >>> model = SEMLISREL()
+        >>> from pgmpy.models import SEMAlg
+        >>> model = SEMAlg()
         # TODO: Finish this example
         """
 
@@ -1004,7 +1005,7 @@ class SEMLISREL:
 class SEM(SEMGraph):
     """
     Class for representing Structural Equation Models. This class is a wrapper over
-    `SEMGraph` and `SEMLISREL` to provide a consistent API over the different representations.
+    `SEMGraph` and `SEMAlg` to provide a consistent API over the different representations.
 
     Attributes
     ----------
@@ -1042,7 +1043,75 @@ class SEM(SEMGraph):
         """
         if syntax.lower() == "lavaan":
             # Create a SEMGraph model using the lavaan str.
-            raise NotImplementedError("Lavaan syntax is not supported yet.")
+
+            # Step 1: Define the grammar for each type of string.
+            var = Word(alphanums)
+            reg_gram = (
+                OneOrMore(
+                    var.setResultsName("predictors", listAllMatches=True)
+                    + Optional(Suppress("+"))
+                )
+                + "~"
+                + OneOrMore(
+                    var.setResultsName("covariates", listAllMatches=True)
+                    + Optional(Suppress("+"))
+                )
+            )
+            intercept_gram = var("inter_var") + "~" + Word("1")
+            covar_gram = (
+                var("covar_var1")
+                + "~~"
+                + OneOrMore(
+                    var.setResultsName("covar_var2", listAllMatches=True)
+                    + Optional(Suppress("+"))
+                )
+            )
+            latent_gram = (
+                var("latent")
+                + "=~"
+                + OneOrMore(
+                    var.setResultsName("obs", listAllMatches=True)
+                    + Optional(Suppress("+"))
+                )
+            )
+
+            # Step 2: Preprocess string to lines
+            lines = kwargs["lavaan_str"]
+
+            # Step 3: Initialize arguments and fill them by parsing each line.
+            ebunch = []
+            latents = []
+            err_corr = []
+            err_var = []
+            for line in lines:
+                line = line.strip()
+                if (line != "") and (not line.startswith("#")):
+                    if intercept_gram.matches(line):
+                        continue
+                    elif reg_gram.matches(line):
+                        results = reg_gram.parseString(line, parseAll=True)
+                        for pred in results["predictors"]:
+                            ebunch.extend(
+                                [
+                                    (covariate, pred)
+                                    for covariate in results["covariates"]
+                                ]
+                            )
+                    elif covar_gram.matches(line):
+                        results = covar_gram.parseString(line, parseAll=True)
+                        for var in results["covar_var2"]:
+                            err_corr.append((results["covar_var1"], var))
+
+                    elif latent_gram.matches(line):
+                        results = latent_gram.parseString(line, parseAll=True)
+                        latents.append(results["latent"])
+                        ebunch.extend(
+                            [(results["latent"], obs) for obs in results["obs"]]
+                        )
+
+            # Step 4: Call the parent __init__ with the arguments
+            super(SEM, self).__init__(ebunch=ebunch, latents=latents, err_corr=err_corr)
+
         elif syntax.lower() == "graph":
             super(SEM, self).__init__(
                 ebunch=kwargs["ebunch"],
@@ -1050,9 +1119,10 @@ class SEM(SEMGraph):
                 err_corr=kwargs["err_corr"],
                 err_var=kwargs["err_var"],
             )
+
         elif syntax.lower() == "lisrel":
 
-            model = SEMLISREL(
+            model = SEMAlg(
                 var_names=var_names, params=params, fixed_masks=fixed_masks
             ).to_SEMGraph()
             # Initialize an empty SEMGraph instance and set the properties.
@@ -1065,7 +1135,7 @@ class SEM(SEMGraph):
             self.full_graph_struct = model.full_graph_struct
 
         elif syntax.lower() == "ram":
-            model = SEMLISREL(
+            model = SEMAlg(
                 eta=kwargs["var_names"],
                 B=kwargs["B"],
                 zeta=kwargs["zeta"],
@@ -1074,21 +1144,30 @@ class SEM(SEMGraph):
             )
 
     @classmethod
-    def from_lavaan(cls, lavaan_str):
+    def from_lavaan(cls, string=None, filename=None):
         """
         Initializes a `SEM` instance using lavaan syntax.
 
         Parameters
         ----------
-        str_model: str (default: None)
+        string: str (default: None)
             A `lavaan` style multiline set of regression equation representing the model.
             Refer http://lavaan.ugent.be/tutorial/syntax1.html for details.
 
-            If None requires `var_names` and `params` to be specified.
+        filename: str (default: None)
+            The filename of the file containing the model in lavaan syntax.
 
         Examples
         --------
         """
+        if filename:
+            with open(filename, "r") as f:
+                lavaan_str = f.readlines()
+        elif string:
+            lavaan_str = string.split("\n")
+        else:
+            raise ValueError("Either `filename` or `string` need to be specified")
+
         return cls(syntax="lavaan", lavaan_str=lavaan_str)
 
     @classmethod
@@ -1200,7 +1279,7 @@ class SEM(SEMGraph):
 
         Examples
         --------
-        >>> from pgmpy.models import SEMLISREL
+        >>> from pgmpy.models import SEMAlg
         # TODO: Finish this example
         """
         eta = var_names["y"] + var_names["x"] + var_names["eta"] + var_names["xi"]

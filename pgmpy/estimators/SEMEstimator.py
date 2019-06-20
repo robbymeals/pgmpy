@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from pgmpy.models import SEMGraph, SEMLISREL, SEM
+from pgmpy.models import SEMGraph, SEMAlg, SEM
 from pgmpy.data import Data
 from pgmpy.global_vars import device, dtype
 from pgmpy.utils import optimize, pinverse
@@ -18,11 +18,11 @@ class SEMEstimator(object):
     def __init__(self, model):
         if isinstance(model, (SEMGraph, SEM)):
             self.model = model.to_lisrel()
-        elif isinstance(model, SEMLISREL):
+        elif isinstance(model, SEMAlg):
             self.model = model
         else:
             raise ValueError(
-                """model should be an instance of either SEMGraph or SEMLISREL class.
+                """model should be an instance of either SEMGraph or SEMAlg class.
                                 Got type: {t}""".format(
                     t=type(model)
                 )
@@ -216,6 +216,10 @@ class SEMEstimator(object):
             GLS: Generalized Least Squares
             2sls: 2-SLS estimator
 
+        init_values: str or dict
+            Options for str: random | std | iv
+            dict: dictionary with keys `B` and `zeta`.
+
         **kwargs: dict
             Extra parameters required in case of some estimators.
             GLS:
@@ -247,7 +251,10 @@ class SEMEstimator(object):
             )
 
         # Initialize the values of parameters as tensors.
-        B_init, zeta_init = self.get_init_values(data, method=init_values.lower())
+        if isinstance(init_values, dict):
+            B_init, zeta_init = init_values["B"], init_values["zeta"]
+        else:
+            B_init, zeta_init = self.get_init_values(data, method=init_values.lower())
         B = torch.tensor(B_init, device=device, dtype=dtype, requires_grad=True)
         zeta = torch.tensor(zeta_init, device=device, dtype=dtype, requires_grad=True)
 
